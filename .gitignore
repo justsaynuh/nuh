@@ -1,0 +1,43 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+.pytest-tmp/
+.mypy_cache/
+.ruff_cache/
+_build/
+
+# Internal dev files (kept locally, not tracked)
+docs/features/
+docs/PLAN.md
+.claude/*
+!.claude/commands/
+# `make docs` runs the docs generator and releases run the leak scan, so both are tracked; other scripts stay local.
+scripts/*
+!scripts/gen_cli_docs.py
+!scripts/leak_scan.py
+.github/*
+!.github/workflows/
+!.github/pull_request_template.md
+
+# Scratch work and the local legacy importer (.scratch/importer/)
+.scratch/
+
+# Decision server: local stack secrets, written by `make start`
+server/.env
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
+.beads/
+.molds/
+
+# Local-only checks (e.g. one-off migration/transition tests); never tracked or run in CI
+tests/local/

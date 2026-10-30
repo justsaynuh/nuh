@@ -1,0 +1,10 @@
+[
+  "rm",
+  "rmdir",
+  "unlink",
+  "shred",
+  "truncate",
+  "rimraf",
+  "del-cli",
+  "del"
+]

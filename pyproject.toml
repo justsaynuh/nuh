@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nuh"
+version = "0.5.5"
+description = "Context-aware safety guard for Claude Code."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "the nuh contributors" },
+]
+keywords = ["claude", "claude-code", "safety", "guard", "hooks", "security", "permissions"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# Both imported lazily, only where used (your config, a YAML system 1 definition, system 1 gates).
+dependencies = ["pyyaml>=6.0", "cel-python>=0.5"]
+
+[project.optional-dependencies]
+dev = ["pytest", "markdown>=3.5", "ruff>=0.6"]
+docs = ["mkdocs-material>=9.0"]
+
+[project.scripts]
+nuh = "nuh.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/justsaynuh/nuh"
+Documentation = "https://nuh.sh"
+Source = "https://github.com/justsaynuh/nuh"
+Issues = "https://github.com/justsaynuh/nuh/issues"
+Changelog = "https://github.com/justsaynuh/nuh/blob/main/CHANGELOG.md"
+
+# An allowlist: the package, the wheel's build hook and the files a release names. Nothing else in
+# the checkout (server/, design docs, agent notes, scratch work) can reach the sdist.
+[tool.hatch.build.targets.sdist]
+only-include = [
+  "src/nuh",
+  "hatch_build.py",
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
+  "NOTICE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nuh"]
+
+# hatch_build.py renders the man page into every wheel (editable too) as share/man/man1/nuh.1.
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

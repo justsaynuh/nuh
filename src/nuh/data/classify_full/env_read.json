@@ -1,0 +1,23 @@
+[
+  "caddy environ",
+  "systemctl show-environment",
+  "systemctl --user show-environment",
+  "vault read",
+  "vault kv get",
+  "az keyvault secret show",
+  "az keyvault secret download",
+  "op read",
+  "op item get",
+  "op document get",
+  "op inject",
+  "bw get",
+  "bw list",
+  "doppler secrets",
+  "infisical secrets",
+  "infisical export",
+  "chamber read",
+  "chamber export",
+  "chamber env",
+  "heroku config",
+  "heroku config:get"
+]

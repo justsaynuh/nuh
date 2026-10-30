@@ -1,0 +1,12 @@
+[
+  "mv",
+  "cp",
+  "chmod",
+  "chown",
+  "chgrp",
+  "chattr",
+  "setfacl",
+  "mkdir",
+  "touch",
+  "tee"
+]
