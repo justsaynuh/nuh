@@ -14,14 +14,18 @@ the request that timed out) on stdin. One run:
    ``model_missing``. Already in ``/api/ps``: ``already_loaded`` (it is
    loaded and still timing out; loading it again would not help).
 3. Otherwise replay the request (same URL, headers and body) capped at
-   ``HEAL_CAP_S`` (10 minutes), discard the answer, and ask ``/api/ps`` again:
-   ``healed`` when the model is now loaded, ``not_loaded`` when it is not,
-   ``heal_failed`` when the replay itself failed.
+   ``HEAL_CAP_S`` (10 minutes), keep only Ollama's timings from the answer,
+   and ask ``/api/ps`` again: ``healed`` when the model is now loaded,
+   ``not_loaded`` when it is not, ``heal_failed`` when the replay itself
+   failed.
 
 Every run appends one JSON line to ``llm-heal.jsonl`` (time, provider,
-model, host, outcome, elapsed_ms, error; load_ms and loaded after a
-replay), kept to the newest ``KEEP_LINES``. Nothing from the request goes
-there. The worker's stdout and stderr go nowhere, so that line is the only
+model, host, outcome, elapsed_ms, error; after a replay also ready_ms,
+loaded and the reply's timings, see ``timings``), kept to the newest
+``KEEP_LINES``. ``ready_ms`` is the replay's wall time: queueing behind
+other requests, freeing VRAM, the load itself, prompt evaluation and the
+answer; only Ollama's own ``load_duration`` (``model_load_ms``) is the
+load. Nothing from the request goes there. The worker's stdout and stderr go nowhere, so that line is the only
 place its failures can be seen: a crash is caught at the top and logged as
 ``error``.
 """
@@ -49,6 +53,8 @@ KEEP_LINES = 500
 _ERROR_CHARS = 300
 # What a request can fail with: refused, unreachable, timed out, an error status (HTTPError), a broken reply.
 _TRANSPORT = (OSError, http.client.HTTPException)
+_OLLAMA_PATHS = ("/api/chat", "/api/generate")  # the endpoints whose replies carry Ollama's timings
+_TIMINGS = {"model_load_ms": "load_duration", "prompt_ms": "prompt_eval_duration", "server_ms": "total_duration"}
 
 BUSY, COOLDOWN, DOWN, NOT_OLLAMA = "busy", "cooldown", "down", "not_ollama"
 MODEL_MISSING, ALREADY_LOADED = "model_missing", "already_loaded"
@@ -59,8 +65,12 @@ class _NotOllama(Exception):
     """The host answers, but not as an Ollama server."""
 
 
-def main(directory: str) -> int:
-    """The worker's entry point: read the job from stdin, run it, log one line. 0 when it healed."""
+def main(directory: str, provider: str, model: str) -> int:
+    """The worker's entry point: read the job from stdin, run it, log one line. 0 when it healed.
+
+    *provider* and *model* come on the command line as well as in the job,
+    so a job that cannot be read still logs what it was meant to heal.
+    """
     raw = sys.stdin.buffer.read()
     t0 = time.monotonic()
     job: dict = {}
@@ -72,7 +82,7 @@ def main(directory: str) -> int:
         # it): the log line is the only place this failure can show.
         record = {"outcome": ERROR, "error": f"{type(exc).__name__}: {exc}"}
     line = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "provider": str(job.get("provider", "")), "model": str(job.get("model", "")),
+            "provider": str(job.get("provider", provider)), "model": str(job.get("model", model)),
             "host": _host(job["url"]) if job.get("url") else "", "outcome": record.pop("outcome"),
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
             "error": str(record.pop("error", ""))[:_ERROR_CHARS], **record}
@@ -81,7 +91,10 @@ def main(directory: str) -> int:
 
 
 def _job(raw: bytes) -> dict:
-    job = json.loads(raw)
+    try:
+        job = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"job unreadable ({len(raw)} bytes received): {exc}") from None
     if not isinstance(job, dict) or not str(job.get("provider", "")).isidentifier():
         raise ValueError("job has no valid provider name")
     for key in ("model", "url", "method", "body"):
@@ -136,16 +149,16 @@ def _probe_and_heal(job: dict) -> dict:
         return {"outcome": ALREADY_LOADED}
     t0 = time.monotonic()
     try:
-        _replay(job)
+        reply = _replay(job)
     except _TRANSPORT as exc:
-        return {"outcome": HEAL_FAILED, "load_ms": int((time.monotonic() - t0) * 1000), "error": _describe(exc)}
-    load_ms = int((time.monotonic() - t0) * 1000)
+        return {"outcome": HEAL_FAILED, "ready_ms": int((time.monotonic() - t0) * 1000), "error": _describe(exc)}
+    replayed = {"ready_ms": int((time.monotonic() - t0) * 1000), **timings(job["url"], reply)}
     try:
         now_loaded = _has(_models(base, "/api/ps"), model)
     except (*_TRANSPORT, _NotOllama) as exc:
-        return {"outcome": NOT_LOADED, "load_ms": load_ms, "loaded": False,
+        return {"outcome": NOT_LOADED, **replayed, "loaded": False,
                 "error": f"/api/ps after the replay: {_describe(exc)}"}
-    return {"outcome": HEALED if now_loaded else NOT_LOADED, "load_ms": load_ms, "loaded": now_loaded}
+    return {"outcome": HEALED if now_loaded else NOT_LOADED, **replayed, "loaded": now_loaded}
 
 
 def _host(url: str) -> str:
@@ -178,10 +191,32 @@ def _has(models: list[dict], model: str) -> bool:
     return model in names or (":" not in model and f"{model}:latest" in names)
 
 
-def _replay(job: dict) -> None:
+def _replay(job: dict) -> bytes:
+    """Send the request that timed out again; the reply's body."""
     req = urllib.request.Request(job["url"], data=base64.b64decode(job["body"]), headers=job["headers"],
                                  method=job["method"])
-    _exchange(req, llm_heal.HEAL_CAP_S)
+    return _exchange(req, llm_heal.HEAL_CAP_S)[1]
+
+
+def timings(url: str, reply: bytes) -> dict:
+    """Ollama's own timings in a replay's *reply*, in ms: model_load_ms, prompt_ms, server_ms.
+
+    Only Ollama's ``/api/chat`` and ``/api/generate`` report them (as
+    nanoseconds). Any other endpoint (system 1's ``/v1/systemone``), or a
+    reply without them, gives ``model_load_ms`` None and a ``timing_note``
+    saying why: the heal still counts, the missing timing is visible.
+    """
+    path = urllib.parse.urlsplit(url).path
+    if not path.endswith(_OLLAMA_PATHS):
+        return {"model_load_ms": None, "timing_note": f"no load timing from {path or '/'}"}
+    try:
+        data = json.loads(reply)
+    except ValueError:
+        data = None
+    found = {key: data.get(field) for key, field in _TIMINGS.items()} if isinstance(data, dict) else {}
+    if not isinstance(found.get("model_load_ms"), int):
+        return {"model_load_ms": None, "timing_note": f"no load_duration in the {path} reply"}
+    return {key: ns // 1_000_000 for key, ns in found.items() if isinstance(ns, int)}
 
 
 def _describe(exc: BaseException) -> str:

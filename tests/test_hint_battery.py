@@ -42,7 +42,6 @@ class TestUnknownHints:
         "ansible-playbook site.yml",
         "packer build tmpl.json",
         "pulumi up",
-        "flyctl deploy",
         "mycustomcli deploy --prod",
         "redis-cli",
         "mongosh mongodb://remote:27017",

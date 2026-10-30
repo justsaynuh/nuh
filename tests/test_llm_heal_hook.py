@@ -36,8 +36,8 @@ def workers(home, monkeypatch):
     """Every worker the hook starts (the real ones), waited for at the end of the test."""
     started: list[subprocess.Popen] = []
 
-    def spawn(job: bytes, directory: str) -> subprocess.Popen:
-        started.append(SPAWN(job, directory))
+    def spawn(job: bytes, directory: str, provider: str, model: str) -> subprocess.Popen:
+        started.append(SPAWN(job, directory, provider, model))
         return started[-1]
 
     monkeypatch.setattr(llm_heal, "_spawn", spawn)
@@ -111,7 +111,12 @@ def test_the_next_provider_is_asked_without_waiting_for_the_worker(host, workers
 
 
 def test_the_hook_process_exits_before_the_heal_finishes(host, home, tmp_path):
-    """Run as Claude Code does: stdout and stderr are pipes read to their end; a worker holding them holds this."""
+    """Run as Claude Code runs the installed hook (guard.py, which ends with ``os._exit(0)``).
+
+    stdout and stderr are pipes read to their end; a worker holding them
+    holds this. The prompt is far over a pipe's buffer: the worker still
+    gets the whole request although the hook exits the moment it started it.
+    """
     host.load_s = 4.0
     config_dir = os.path.join(home, ".config", "nuh")
     os.makedirs(config_dir)
@@ -119,12 +124,15 @@ def test_the_hook_process_exits_before_the_heal_finishes(host, home, tmp_path):
         json.dump({"llm": _llm(host.url)}, f)  # JSON is YAML
     project = tmp_path / "project"
     project.mkdir()
-    payload = {"tool_name": "Bash", "tool_input": {"command": "somethingunknown123 --flag"}, "session_id": "s",
+    # The script's text goes into the prompt (under llm_action's 48,000-character cap); each "é" is six
+    # bytes of JSON, so the request body is over 200 KB.
+    (project / "big.py").write_text(("# " + "é" * 70 + "\n") * 500, encoding="utf-8")
+    payload = {"tool_name": "Bash", "tool_input": {"command": "python3 big.py"}, "session_id": "s",
                "tool_use_id": "toolu_heal", "cwd": str(project), "hook_event_name": "PreToolUse"}
     env = {k: v for k, v in os.environ.items() if not k.startswith("NUH_")}
     env["HOME"] = home
     started = time.monotonic()
-    done = subprocess.run([sys.executable, "-m", "nuh.hook"], input=json.dumps(payload), capture_output=True,
+    done = subprocess.run([sys.executable, "-m", "nuh.guard"], input=json.dumps(payload), capture_output=True,
                           text=True, env=env, cwd=str(project), timeout=30)
     elapsed = time.monotonic() - started
     assert json.loads(done.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -134,7 +142,10 @@ def test_the_hook_process_exits_before_the_heal_finishes(host, home, tmp_path):
     while not _log(home) and time.monotonic() < deadline:
         time.sleep(0.1)
     [record] = _log(home)
-    assert record["outcome"] == "healed" and record["load_ms"] >= 4000
+    assert (record["outcome"], record["provider"], record["model"]) == ("healed", "ollama", MODEL)
+    assert record["ready_ms"] >= 4000 and record["model_load_ms"] == 4000
+    sent, replayed = host.posts
+    assert len(sent["body"]) > 200_000 and replayed["body"] == sent["body"]
 
 
 def test_config_show_and_parse(capsys):
@@ -149,17 +160,25 @@ def test_config_show_and_parse(capsys):
 
 def test_heal_log_shows_each_run(home, capsys, monkeypatch):
     state = os.path.join(home, ".local", "state", "nuh")
-    llm_heal_worker.append_log(state, {"ts": "2026-10-23T08:00:00+00:00", "provider": "system1", "model": MODEL,
-                                       "host": "https://s1.example.", "outcome": "healed", "load_ms": 41200,
-                                       "elapsed_ms": 41500, "error": ""})
-    llm_heal_worker.append_log(state, {"ts": "2026-10-23T08:01:00+00:00", "provider": "ollama", "model": MODEL,
-                                       "host": "https://o.example.", "outcome": "down", "elapsed_ms": 3,
-                                       "error": "URLError: refused"})
+    healed = {"model": MODEL, "outcome": "healed", "elapsed_ms": 157600, "error": "", "loaded": True}
+    for row in ({"provider": "ollama", "host": "http://o.example.", "ready_ms": 157500, "model_load_ms": 4200,
+                 "prompt_ms": 900, "server_ms": 157400},
+                {"provider": "system1", "host": "https://s1.example.", "ready_ms": 41200, "model_load_ms": None,
+                 "timing_note": "no load timing from /v1/systemone"},
+                {"provider": "system1", "host": "https://s1.example.", "load_ms": 41200},  # a row from before ready_ms
+                {"provider": "ollama", "host": "http://o.example.", "outcome": "heal_failed", "ready_ms": 600000,
+                 "error": "TimeoutError: no complete response within 600 s"},
+                {"provider": "ollama", "host": "https://o.example.", "outcome": "down", "elapsed_ms": 3,
+                 "error": "URLError: refused"}):
+        llm_heal_worker.append_log(state, {"ts": "2026-10-23T08:00:00+00:00", **healed, **row})
     monkeypatch.setattr(sys, "argv", ["nuh", "heal-log"])
     cli.main()
-    first, second = capsys.readouterr().out.splitlines()
-    assert "system1" in first and "healed: loaded the model" in first and "load 41.2 s" in first
-    assert "down: server down" in second and "error: URLError: refused" in second
+    ollama, system1, old, failed, down = capsys.readouterr().out.splitlines()
+    assert "heal_failed: replay failed  after 600.0 s  error: TimeoutError" in failed
+    assert ollama.endswith("healed: loaded the model  ready after 157.5 s (model load 4.2 s)")
+    assert system1.endswith("healed: loaded the model  ready after 41.2 s (no load timing from /v1/systemone)")
+    assert old.endswith("healed: loaded the model  ready after 41.2 s")
+    assert "down: server down" in down and "ready after" not in down and down.endswith("error: URLError: refused")
     monkeypatch.setattr(sys, "argv", ["nuh", "heal-log", "-n", "1", "--json"])
     cli.main()
     assert json.loads(capsys.readouterr().out)["outcome"] == "down"

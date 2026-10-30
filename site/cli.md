@@ -711,7 +711,7 @@ Show what the llm.self\_heal workers did (read only)
 nuh heal-log [-n LIMIT] [--json]
 ```
 
-What the `llm.self_heal` workers did, oldest first: one line per worker run from `~/.local/state/nuh/llm-heal.jsonl` with its time, provider, model, host, outcome, model load time and error. A worker starts after a provider times out, and replays the request only when the model is on the server but not loaded. Read only.
+What the `llm.self_heal` workers did, oldest first: one line per worker run from `~/.local/state/nuh/llm-heal.jsonl` with its time, provider, model, host, outcome, how long the replay took to answer (and the model load within it, when Ollama reports one) and error. A worker starts after a provider times out, and replays the request only when the model is on the server but not loaded. Read only.
 
 | Option | Description |
 | --- | --- |
@@ -733,8 +733,13 @@ nuh heal-log -n 0 --json
 Sample output (see [`llm.self_heal`](configuration/llm.md#self_heal)):
 
 ```text
-2026-10-23T08:00:00+00:00  system1  nimble:9b  https://classification.example  healed: loaded the model  load 41.2 s
+2026-10-23T08:00:00+00:00  system1  nimble:9b  https://classification.example  healed: loaded the model  ready after 41.2 s (no load timing from /v1/systemone)
+2026-10-23T08:20:00+00:00  ollama  qwen3:8b  http://ollama.example:11434  healed: loaded the model  ready after 157.5 s (model load 4.2 s)
 ```
+
+`ready after` is the replay's wall time: queueing on the server, freeing VRAM, the load, prompt evaluation and the
+answer. The model load inside it comes from Ollama's own `load_duration`, which only `/api/chat` and `/api/generate`
+report.
 
 ## Security Demo
 

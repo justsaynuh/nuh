@@ -117,6 +117,19 @@ def hidden_chars_verdict(target_path: str | None) -> floor.Verdict | None:
                          hidden_chars.RULE)
 
 
+def script_text(target_path: str) -> str | None:
+    """The text of the script *target_path* names, as the content scan reads it; None when it cannot.
+
+    None for a file that is unreadable, too large to scan or not text, so a
+    caller that found the script clean asks when the file changed since.
+    """
+    from nuh.content import MAX_SCAN_CHARS
+    content = _read_script_content(paths.resolve_path(target_path), MAX_SCAN_CHARS + 1)
+    if content is None or len(content) > MAX_SCAN_CHARS or "\x00" in content:
+        return None
+    return content
+
+
 def _read_script_content(path: str, max_chars: int) -> str | None:
     """Read up to *max_chars* characters of a script for content inspection; None on error.
 

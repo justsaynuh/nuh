@@ -2,7 +2,9 @@
 
 Every POST (``/api/chat``, ``/v1/systemone``, any path) is a request that
 needs the model: it is recorded raw, takes ``load_s`` (a cold load), then
-the model counts as loaded and shows in ``/api/ps``. ``ollama = False``
+the model counts as loaded and shows in ``/api/ps``. Replies to
+``/api/chat`` and ``/api/generate`` carry Ollama's timings (``load_duration``
+is ``load_s``). ``ollama = False``
 makes every GET a 404, as a server that is not Ollama answers.
 """
 
@@ -54,8 +56,12 @@ class _Handler(BaseHTTPRequestHandler):
         with host.lock:
             if host.post_status == 200 and model not in host.loaded:
                 host.loaded.append(model)
+        reply: dict = {"message": {"content": "{}"}}
+        if self.path.endswith(("/api/chat", "/api/generate")):  # Ollama's own timings, in nanoseconds
+            ns = int(host.load_s * 1e9)
+            reply.update(load_duration=ns, prompt_eval_duration=20_000_000, total_duration=ns + 40_000_000)
         try:
-            self._send(host.post_status, json.dumps({"message": {"content": "{}"}}).encode())
+            self._send(host.post_status, json.dumps(reply).encode())
         except (BrokenPipeError, ConnectionResetError):
             # The hook's request gave up (its timeout) while the model loaded: no one is left to answer.
             pass

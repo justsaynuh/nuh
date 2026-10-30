@@ -35,7 +35,7 @@ def workers(state, monkeypatch):
     """Each worker the hook starts: the real worker code (``run``) on a thread here, joined at the end."""
     started: list[threading.Thread] = []
 
-    def spawn(job: bytes, directory: str) -> threading.Thread:
+    def spawn(job: bytes, directory: str, provider: str, model: str) -> threading.Thread:
         thread = threading.Thread(target=llm_heal_worker.run, args=(json.loads(job), directory), daemon=True)
         thread.start()
         started.append(thread)
@@ -119,7 +119,7 @@ def test_the_replay_is_cut_at_the_cap(host, state, monkeypatch):
     host.load_s = 1.5
     record = llm_heal_worker.run(_job(host.url + "/api/chat"), state)
     assert record["outcome"] == "heal_failed" and "within 0.5 s" in record["error"]
-    assert 500 <= record["load_ms"] < 1500
+    assert 500 <= record["ready_ms"] < 1500
 
 
 def test_a_worker_that_errors_still_stamps_its_end(state, monkeypatch):

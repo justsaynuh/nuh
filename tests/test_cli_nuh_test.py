@@ -57,7 +57,7 @@ class TestCmdTest:
     ], ids=["openssh-key-asks", "postgres-url-password-is-redact-only"])
     def test_write_secret_ask_or_redact_only(self, tmp_path, capsys, content, verdict, desc):
         from nuh.cli_dryrun import cmd_test
-        args = argparse.Namespace(tool="Write", path=str(tmp_path / "project" / "settings.env"),
+        args = argparse.Namespace(tool="Write", path=str(tmp_path / "project" / "settings.conf"),
                                   content=content, pattern=None, args=[])
         cmd_test(args)
         out = capsys.readouterr().out

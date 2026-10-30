@@ -32,7 +32,7 @@ def _job(url: str, *, model: str = MODEL, headers: dict | None = None, provider:
 def _run(state: str, job: bytes) -> dict:
     """Run one worker to its end; its log line."""
     before = len(llm_heal_worker.read_log(state))
-    assert SPAWN(job, state).wait(timeout=30) in (0, 1)
+    assert SPAWN(job, state, "system1", MODEL).wait(timeout=30) in (0, 1)
     records = llm_heal_worker.read_log(state)
     assert len(records) == before + 1
     return records[-1]
@@ -50,13 +50,17 @@ def host():
         yield h
 
 
-@pytest.mark.parametrize("path", ["/v1/systemone", "/api/chat"])
-def test_a_cold_model_is_loaded_by_replaying_the_exact_request(host, state, path):
+@pytest.mark.parametrize("path, timing", [
+    ("/v1/systemone", {"model_load_ms": None, "timing_note": "no load timing from /v1/systemone"}),
+    ("/api/chat", {"model_load_ms": 300, "prompt_ms": 20, "server_ms": 340}),  # the stub's Ollama durations
+])
+def test_a_cold_model_is_loaded_by_replaying_the_exact_request(host, state, path, timing):
     host.load_s = 0.3
     headers = {"Content-type": "application/json", "Authorization": "Bearer tok-1"}
     record = _run(state, _job(host.url + path, headers=headers))
     assert record["outcome"] == "healed" and record["loaded"] is True
-    assert record["load_ms"] >= 300 and record["elapsed_ms"] >= record["load_ms"]
+    assert record["ready_ms"] >= 300 and record["elapsed_ms"] >= record["ready_ms"]
+    assert {key: record.get(key) for key in timing} == timing and "load_ms" not in record
     assert (record["provider"], record["model"], record["host"], record["error"]) == ("system1", MODEL, host.url, "")
     [post] = host.posts
     assert post["path"] == path and post["body"] == BODY
@@ -95,10 +99,11 @@ def test_a_failed_replay_is_logged(host, state):
     assert len(host.posts) == 1
 
 
-def test_a_job_it_cannot_read_is_an_error_line(state):
-    assert SPAWN(b"not json", state).wait(timeout=30) == 1
+def test_a_job_it_cannot_read_is_an_error_line_that_names_provider_and_model(state):
+    assert SPAWN(b'{"provider": "olla', state, "ollama", MODEL).wait(timeout=30) == 1
     [record] = llm_heal_worker.read_log(state)
-    assert record["outcome"] == "error" and record["error"].startswith("JSONDecodeError")
+    assert (record["outcome"], record["provider"], record["model"]) == ("error", "ollama", MODEL)
+    assert record["error"].startswith("ValueError: job unreadable (18 bytes received): Unterminated string")
 
 
 @pytest.mark.parametrize("model, names, found", [
@@ -132,7 +137,7 @@ def test_the_cooldown_is_per_provider(host, state):
 
 def test_concurrent_workers_heal_once(host, state):
     host.load_s = 1.0
-    procs = [SPAWN(_job(host.url + "/api/chat"), state) for _ in range(4)]
+    procs = [SPAWN(_job(host.url + "/api/chat"), state, "system1", MODEL) for _ in range(4)]
     for proc in procs:
         proc.wait(timeout=30)
     outcomes = sorted(r["outcome"] for r in llm_heal_worker.read_log(state))
@@ -149,6 +154,19 @@ def test_nothing_from_the_request_is_written(host, state):
             assert MARKER not in f.read()
         assert stat.S_IMODE(os.stat(os.path.join(state, name)).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(state).st_mode) == 0o700
+
+
+_NO_LOAD = {"model_load_ms": None, "timing_note": "no load_duration in the /api/chat reply"}
+
+
+@pytest.mark.parametrize("url, reply, timing", [
+    ("http://o/api/generate", b'{"load_duration": 4200000000, "total_duration": 9000000000}',
+     {"model_load_ms": 4200, "server_ms": 9000}),
+    ("http://o/api/chat", b'{"done": true}', _NO_LOAD),
+    ("http://o/api/chat", b'{"message": {"content"', _NO_LOAD),  # cut short: not JSON
+])
+def test_ollama_timings_or_a_note_saying_why_there_are_none(url, reply, timing):
+    assert llm_heal_worker.timings(url, reply) == timing
 
 
 def test_the_log_keeps_its_newest_lines(state):

@@ -25,7 +25,7 @@ These are checked on every tool call that touches a file path (Bash, Read, Write
 | `.npmrc` | ask |
 | `.pypirc` | ask |
 
-Basename matching triggers regardless of directory -- a file named `.env` anywhere will be flagged.
+Basename matching triggers regardless of directory -- a file named `.env` anywhere will be flagged. So do the other env files (`*.env` such as `cloudflare.env`, `.envrc`, and `.env.*` except templates like `.env.example`), key and certificate files (`*.pem`, `*.key`, `id_rsa*`, ...), and deploy CLIs' login stores (`~/.wrangler`, `~/.config/.wrangler`, `~/.fly`, `~/.netlify`, `~/.railway`, ...).
 
 ## Hook self-protection
 

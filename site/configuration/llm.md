@@ -319,9 +319,9 @@ The worker:
 
 1. Takes a lock on `~/.local/state/nuh/llm-heal.<provider>` and gives up if another worker holds it or the file was touched less than 10 minutes ago (the cooldown, always equal to the replay cap below). Otherwise it touches the file when the attempt starts and again when it ends, whatever comes of it. So no worker starts while an attempt is running, and the next one comes at least 10 minutes after the last one ended.
 2. Probes the host of the provider's URL (`scheme://host[:port]`): `GET /api/ps` and `/api/tags`, 5 s each.
-3. Only when the server is up, lists the model, and does not have it loaded, replays the request that timed out (same URL, headers and body, so `/v1/systemone` and `/api/chat` alike) with a 10-minute cap, discards the answer, and checks `/api/ps` again.
+3. Only when the server is up, lists the model, and does not have it loaded, replays the request that timed out (same URL, headers and body, so `/v1/systemone` and `/api/chat` alike) with a 10-minute cap, keeps only Ollama's timings from the answer, and checks `/api/ps` again.
 
-The request reaches the worker through a pipe and is never written to disk. Each run appends one line to `~/.local/state/nuh/llm-heal.jsonl` (time, provider, model, host, outcome, `elapsed_ms`, `error`, and after a replay `load_ms` and `loaded`), kept to the newest 500 lines, with nothing from the request. The outcomes:
+The request reaches the worker as its stdin, an in-memory file written whole before the worker starts, so the hook can exit at once; on macOS, which has no in-memory files, it is an unlinked temporary file instead. Each run appends one line to `~/.local/state/nuh/llm-heal.jsonl` (time, provider, model, host, outcome, `elapsed_ms`, `error`, and after a replay `ready_ms`, `loaded` and the reply's timings), kept to the newest 500 lines, with nothing from the request. `ready_ms` is the replay's wall time: queueing, freeing VRAM, the load, prompt evaluation and the answer. Ollama's `/api/chat` and `/api/generate` replies also give `model_load_ms` (its `load_duration`, the load alone), `prompt_ms` and `server_ms`; any other endpoint, such as system 1's `/v1/systemone`, gives `model_load_ms: null` and a `timing_note`. The outcomes:
 
 | Outcome | Meaning |
 |---|---|

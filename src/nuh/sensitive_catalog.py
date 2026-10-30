@@ -33,6 +33,15 @@ CREDENTIAL_DIRS: list[tuple[str, str, str]] = [
     (_home(".config", "pypoetry", "auth.toml"), "~/.config/pypoetry/auth.toml", "ask"),
     (_home(".config", "containers", "auth.json"), "~/.config/containers/auth.json", "ask"),
     (_home(".gem", "credentials"), "~/.gem/credentials", "ask"),
+    # Deploy CLIs' login tokens (wrangler, fly, vercel, netlify, railway, firebase).
+    (_home(".wrangler"), "~/.wrangler", "ask"),
+    (_home(".config", ".wrangler"), "~/.config/.wrangler", "ask"),
+    (_home(".fly"), "~/.fly", "ask"),
+    (_home(".local", "share", "com.vercel.cli"), "~/.local/share/com.vercel.cli", "ask"),
+    (_home(".netlify"), "~/.netlify", "ask"),
+    (_home(".config", "netlify"), "~/.config/netlify", "ask"),
+    (_home(".railway"), "~/.railway", "ask"),
+    (_home(".config", "configstore", "firebase-tools.json"), "~/.config/configstore/firebase-tools.json", "ask"),
 ]
 
 _SHELL_INIT = (".bashrc", ".bash_profile", ".bash_aliases", ".bash_login", ".bash_logout", ".profile",
@@ -68,6 +77,9 @@ CREDENTIAL_BASENAMES: list[tuple[str, str, str]] = [
     ("id_ecdsa*", "id_ecdsa*", "ask"),
     ("id_dsa*", "id_dsa*", "ask"),
     (ENV_PATTERN, ENV_PATTERN, "ask"),
+    # Env files by another name (cloudflare.env, prod.env) and direnv's: what `set -a; . f` loads.
+    ("*.env", "*.env", "ask"),
+    (".envrc", ".envrc", "ask"),
 ]
 
 

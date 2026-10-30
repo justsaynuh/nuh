@@ -24,8 +24,11 @@ outlives the cap (its probes come on top of the replay).
 
 ``llm_providers._post`` notes the request that timed out (``note_timeout``);
 the cascade clears it before each attempt (``forget``) and, after a failed
-one, hands it to ``after_failure``. The request body reaches the worker
-through its stdin pipe and is never written to disk.
+one, hands it to ``after_failure``. The job (the request that timed out)
+reaches the worker as its stdin: an in-memory file (``memfd_create``),
+written whole before the worker starts, so the hook may exit at once
+(guard.py ends with ``os._exit``). Where there is no memfd (macOS) it is
+an unlinked temporary file instead, which the OS may page to disk.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ import base64
 import json
 import os
 import sys
-import threading
 import time
 import urllib.request
 from typing import IO, TYPE_CHECKING
@@ -116,7 +118,7 @@ def after_failure(provider: str, model: str, llm_config: dict) -> subprocess.Pop
     try:
         if _cooling(state_file(directory, provider)):
             return None
-        return _spawn(json.dumps(job).encode(), directory)
+        return _spawn(json.dumps(job).encode(), directory, provider, model)
     except OSError as exc:
         # Healing is a side errand: a state dir nuh cannot stat or a worker
         # that cannot start must not change the review's outcome. Reported,
@@ -133,34 +135,40 @@ def _cooling(path: str) -> bool:
     return in_cooldown(mtime)
 
 
-def _spawn(job: bytes, directory: str) -> subprocess.Popen[bytes]:
+def _spawn(job: bytes, directory: str, provider: str, model: str) -> subprocess.Popen[bytes]:
     """Run the worker detached: its own session, no inherited stdio, the job on its stdin.
 
     Claude Code waits for the hook's stdout and stderr to close, so the
-    worker gets neither. The job is written from a daemon thread: a body
-    larger than the pipe buffer would otherwise hold the hook until the
-    worker starts reading.
+    worker gets neither. The job is a file written whole before the worker
+    starts (``_job_file``), never a pipe: the hook can exit the moment this
+    returns without cutting the job short, whatever its size. *provider*
+    and *model* (not secret) also go on the worker's command line, so its
+    log line names them even when the job cannot be read.
     """
     import subprocess  # lazy import: needed only after a timeout
     package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # -I: neither the hook's cwd (a project, maybe untrusted) nor PYTHON* variables shape what the child imports.
     code = ("import sys; sys.path.insert(0, sys.argv[1]); from nuh.llm_heal_worker import main; "
-            "sys.exit(main(sys.argv[2]))")
-    proc = subprocess.Popen(
-        [sys.executable, "-I", "-c", code, package_parent, directory],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        cwd="/", start_new_session=True, close_fds=True)
-    threading.Thread(target=_hand_over, args=(proc.stdin, job), name="nuh-heal-job", daemon=True).start()
-    return proc
+            "sys.exit(main(*sys.argv[2:]))")
+    with _job_file(job) as stdin:
+        return subprocess.Popen(
+            [sys.executable, "-I", "-c", code, package_parent, directory, provider, model],
+            stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cwd="/", start_new_session=True, close_fds=True)
 
 
-def _hand_over(pipe: IO[bytes] | None, job: bytes) -> None:
-    if pipe is None:
-        return
+def _job_file(job: bytes) -> IO[bytes]:
+    """*job* in a file at offset 0: in memory (memfd), or an unlinked temporary file where there is no memfd."""
+    if hasattr(os, "memfd_create"):
+        f: IO[bytes] = os.fdopen(os.memfd_create("nuh-heal-job", os.MFD_CLOEXEC), "w+b")
+    else:
+        import tempfile  # lazy import: macOS only
+        f = tempfile.TemporaryFile()
     try:
-        pipe.write(job)
-        pipe.close()
-    except OSError as exc:
-        # The worker exited before reading its job: it healed nothing, and
-        # its own log line (if any) says why. Say so here too.
-        sys.stderr.write(f"nuh: LLM self-heal: could not hand the worker its job: {exc}\n")
+        f.write(job)
+        f.flush()
+        f.seek(0)
+    except OSError:
+        f.close()
+        raise
+    return f

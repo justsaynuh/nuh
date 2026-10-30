@@ -213,8 +213,9 @@ COMMANDS: dict[str, CommandText] = {
     )),
     "heal-log": CommandText((
         "What the `llm.self_heal` workers did, oldest first: one line per worker run from "
-        "`~/.local/state/nuh/llm-heal.jsonl` with its time, provider, model, host, outcome, model load time "
-        "and error. A worker starts after a provider times out, and replays the request only when the model "
+        "`~/.local/state/nuh/llm-heal.jsonl` with its time, provider, model, host, outcome, how long "
+        "the replay took to answer (and the model load within it, when Ollama reports one) and error. "
+        "A worker starts after a provider times out, and replays the request only when the model "
         "is on the server but not loaded. Read only.",
     ), (
         Example("the last 20 runs", "nuh heal-log"),

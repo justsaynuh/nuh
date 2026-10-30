@@ -76,7 +76,7 @@ def _no_heal_workers(monkeypatch):
     Provider timeouts are common in the suite, against made-up hosts: a
     worker would probe them for real, from a detached process.
     """
-    monkeypatch.setattr(llm_heal, "_spawn", lambda job, directory: None)
+    monkeypatch.setattr(llm_heal, "_spawn", lambda job, directory, provider, model: None)
 
 
 @pytest.fixture(autouse=True)

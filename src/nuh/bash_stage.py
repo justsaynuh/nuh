@@ -7,18 +7,20 @@ recipes, package runners and shells (``bash -c``, heredocs, ``source``,
 """
 
 import os
+import shlex
 from dataclasses import replace
 
 from nuh import (bash_type_floor, catastrophic, context, deadline, exec_source, file_operands, find_args, floor,
-                 floor_rules, found_files, hidden_chars, nested_floor, path_names, runners,
-                 sensitive_paths, shell_env, shell_expand, shell_program_text, shell_state, shell_unresolved,
-                 task_recipe, task_runners, taxonomy)
+                 floor_rules, found_files, hidden_chars, lang_exec_context, nested_floor, path_names, paths,
+                 runners, script_writes, sensitive_paths, shell_env, shell_expand, shell_program_text, shell_state,
+                 shell_unresolved, task_recipe, task_runners, taxonomy)
 from nuh.bash_assignments import _classify_assignments
 from nuh.bash_compose import _floor_rank
 from nuh.bash_decompose import _wrapped_stage
 from nuh.bash_paths import (_body_text_words, _check_awk_files, _check_extracted_paths, _inline_code_words,
                             _path_operands, _URL_RE)
-from nuh.bash_policy import _apply_policy, _extract_primary_target, _stage_program
+from nuh.bash_policy import (_apply_policy, _extract_primary_target, _resolve_script_path, _stage_program,
+                             _StageProgram)
 from nuh.bash_programs import _SOURCE_COMMANDS, _source_program, _stdin_readings
 from nuh.bash_redirects import _apply_redirect_guard, _classify_redirect_write
 from nuh.bash_shell import _unwrap_shell
@@ -158,6 +160,7 @@ def _classify_stage_body(
         _apply_policy(sr, program if sr.action_type == taxonomy.LANG_EXEC else None,
                       [tok for i, tok in enumerate(tokens) if i not in text])
     bash_type_floor.apply(sr, tokens, floor_type)
+    sr = _classify_script_body(sr, stage, program, depth, kw)
 
     # Path extraction + checking (regardless of policy)
     code, files = _inline_code_words(stage, sr), file_operands.files(_shell_words(stage))
@@ -336,19 +339,7 @@ def _classify_recipe(stage: Stage, recipe: task_recipe.Recipe, depth: int, kw: d
         sr.reason = format_content_message(where, matches)
     if hidden_chars.find(text) >= 0:
         _escalate(sr, floor.Verdict(taxonomy.ASK, hidden_chars.reason(text, where), hidden_chars.RULE))
-    for result, line in judged:
-        for inner in result.walk():
-            if inner.decision == taxonomy.ALLOW or (inner.action_type == taxonomy.UNKNOWN and not inner.floor
-                                                    and not inner.unreadable_program
-                                                    and inner.decision == taxonomy.ASK):
-                continue  # an unknown command rests on the content scan, as in a script
-            stricter = taxonomy.STRICTNESS.get(inner.decision, 2) > taxonomy.STRICTNESS.get(sr.decision, 0)
-            if stricter or (inner.floor and inner.decision == sr.decision and not sr.floor):
-                sr.action_type, sr.decision, sr.floor = inner.action_type, inner.decision, inner.floor
-                sr.reason = f"{recipe.runner}: {inner.reason} (line: {line[:100]})"
-                # The path the hint suggests trusting is the line's, not make's argv.
-                sr.redirect_target = (inner.redirect_target or inner.context_target
-                                      or _extract_primary_target(inner.tokens))
+    _escalate_judged(sr, [(result, f"line: {line[:100]}") for result, line in judged], recipe.runner)
     if recipe.opaque_reason:
         policy = taxonomy.get_policy(taxonomy.UNKNOWN, user_actions)
         sr.action_type = taxonomy.UNKNOWN
@@ -366,4 +357,63 @@ def _classify_recipe(stage: Stage, recipe: task_recipe.Recipe, depth: int, kw: d
         sr.default_policy = taxonomy.get_policy(taxonomy.PACKAGE_RUN, user_actions)
         sr.decision = sr.default_policy if sr.default_policy != taxonomy.CONTEXT else taxonomy.ALLOW
         sr.reason = f"{recipe.runner}: every recipe line allowed" if lines else f"{recipe.runner}: nothing to run"
+    return sr
+
+
+def _escalate_judged(sr: StageResult, judged: list[tuple[StageResult, str]], label: str) -> None:
+    """Raise *sr* to the strictest judged command in *judged* (result, where it was); mutates *sr*.
+
+    An allowed command, and an unknown one with no floor (it rests on the
+    content scan, as in a script), leave *sr* as it is. *where* names the
+    recipe line; empty, the command's own words stand in.
+    """
+    for result, where in judged:
+        for inner in result.walk():
+            if inner.decision == taxonomy.ALLOW or (inner.action_type == taxonomy.UNKNOWN and not inner.floor
+                                                    and not inner.unreadable_program
+                                                    and inner.decision == taxonomy.ASK):
+                continue
+            stricter = taxonomy.STRICTNESS.get(inner.decision, 2) > taxonomy.STRICTNESS.get(sr.decision, 0)
+            if stricter or (inner.floor and inner.decision == sr.decision and not sr.floor):
+                sr.action_type, sr.decision, sr.floor = inner.action_type, inner.decision, inner.floor
+                sr.reason = f"{label}: {inner.reason} ({where or 'command: ' + shlex.join(inner.tokens)[:100]})"
+                # The path the hint suggests trusting is the command's, not the runner's or script's argv.
+                sr.redirect_target = (inner.redirect_target or inner.context_target
+                                      or _extract_primary_target(inner.tokens))
+
+
+def _classify_script_body(sr: StageResult, stage: Stage, program: _StageProgram | None, depth: int,
+                          kw: dict) -> StageResult:
+    """A clean shell script's stage, raised to what the commands in the script classify as.
+
+    "script clean" means the content scan found none of its patterns. The
+    commands a shell script runs are classified with the same tables as any
+    command (the body runs like a script written by a heredoc), judged as a
+    recipe's lines are (``_escalate_judged``). A script nested too deep to
+    follow asks. Any other stage (a Python script, an ask) comes back as is.
+    *program* is the stage's program when it is not in argv (``_stage_program``).
+    """
+    if (sr.action_type != taxonomy.LANG_EXEC or sr.decision != taxonomy.ALLOW
+            or not sr.reason.startswith("script clean:")):
+        return sr
+    target = program[0] if program is not None else _resolve_script_path(stage.tokens)
+    if not target:
+        return sr
+    where = f"script {path_names.friendly_path(paths.resolve_path(target))}"
+    body = lang_exec_context.script_text(target)
+    unread = f"{where}: changed after its content scan" if body is None else ""
+    if body is not None and stage.tokens[0] not in _SOURCE_COMMANDS and \
+            script_writes.shell_program(stage.tokens, body) is None:
+        return sr
+    if not unread and depth + 2 >= _MAX_UNWRAP_DEPTH:
+        unread = f"{where}: nested too deep for nuh to classify its commands"
+    if unread:
+        asked = _escalate_unknown(sr, unread, kw.get("user_actions"))
+        asked.unreadable_program = True  # an enclosing script's or recipe's judgement keeps this ask
+        return asked
+    body_sr = _unwrap_shell(replace(stage, script_body=body), depth, **kw)
+    if body_sr is not None:
+        _escalate_judged(sr, [(body_sr, "")], where)
+        if sr.decision != taxonomy.ALLOW:
+            sr.inner_stages.append(body_sr)
     return sr

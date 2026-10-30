@@ -45,8 +45,19 @@ def _line(record: dict) -> str:
     outcome = str(record.get("outcome", ""))
     parts = [str(record.get("ts", "")), str(record.get("provider", "")), str(record.get("model", "")),
              str(record.get("host", "")), f"{outcome}: {_WHAT.get(outcome, outcome)}"]
-    if isinstance(record.get("load_ms"), int):
-        parts.append(f"load {record['load_ms'] / 1000:.1f} s")
+    ready = record.get("ready_ms", record.get("load_ms"))  # rows written before ready_ms called it load_ms
+    if isinstance(ready, int):  # a failed replay was never ready: it ran that long
+        label = "after" if outcome == llm_heal_worker.HEAL_FAILED else "ready after"
+        parts.append(f"{label} {ready / 1000:.1f} s{_load_detail(record)}")
     if record.get("error"):
         parts.append(f"error: {record['error']}")
     return "  ".join(parts)
+
+
+def _load_detail(record: dict) -> str:
+    """How much of the wait was the model load, as Ollama reported it; else why that is unknown."""
+    if isinstance(record.get("model_load_ms"), int):
+        return f" (model load {record['model_load_ms'] / 1000:.1f} s)"
+    if record.get("timing_note"):
+        return f" ({record['timing_note']})"
+    return ""
