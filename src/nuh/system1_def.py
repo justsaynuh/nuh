@@ -10,7 +10,7 @@ A definition that cannot be read or is malformed is a DefinitionError, which
 fails the system 1 attempt; nuh never falls back to the shipped default
 behind the user's back.
 
-    based_on: 0.5.5              # the nuh version a written-out copy came from (informational)
+    based_on: 0.6.0              # the nuh version a written-out copy came from (informational)
     preamble: <text>             # put before the tool call
     context:
       action_tokens: 1500        # the tool call, middle-clipped

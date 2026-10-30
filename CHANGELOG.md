@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-30
+
 ### Fixed
 
 - A `llm.self_heal` worker got its whole job even when the hook exited at once. The job went over a pipe written by a thread, and guard.py's `os._exit` killed that thread whenever the job was over the free pipe space (about 48 KB, 8 KiB past `fs.pipe-user-pages-soft`), which happens when the cascade's last provider times out: the worker logged an `error` with no provider, model or host. The job is now an in-memory file written before the worker starts (an unlinked temp file on macOS), the provider and model also go on the worker's command line, and an unreadable job says how many bytes arrived. `nuh heal-log` now says `ready after` for the replay's wall time (log field `ready_ms`, was `load_ms`), and shows Ollama's own `load_duration` as the model load, or why there is none (`no load timing from /v1/systemone`).

@@ -59,13 +59,17 @@ docs: $(CLIENT_VENV)/.deps ## Regenerate the docs' generated blocks: site/cli.md
 
 # --- release ----------------------------------------------------------------
 
-tag: ## Tag vX.Y.Z (version from pyproject.toml) at HEAD
+tag: ## Tag vX.Y.Z (version from pyproject.toml) at HEAD, signed; refuses outside the public repo
+	@case "$$(git remote get-url origin 2>/dev/null)" in \
+		*github.com:justsaynuh/nuh|*github.com:justsaynuh/nuh.git|*github.com/justsaynuh/nuh|*github.com/justsaynuh/nuh.git) ;; \
+		*) echo "Refusing to tag: origin is not github.com/justsaynuh/nuh; tag in the public tree (release/publish_tree.py)."; exit 1 ;; \
+	esac
 	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null; then \
 		echo "Tag v$(VERSION) already exists; bump the version in pyproject.toml first."; \
 		exit 1; \
 	fi
-	git tag -a v$(VERSION) -m "v$(VERSION)"
-	@echo "Tagged v$(VERSION). Push it to release: git push origin v$(VERSION)"
+	git tag -s v$(VERSION) -m "v$(VERSION)"
+	@echo "Tagged v$(VERSION), signed. Push it to release: git push origin v$(VERSION)"
 
 release: lint test tag ## Lint, test, then tag; pushing the tag runs the release workflow
 
