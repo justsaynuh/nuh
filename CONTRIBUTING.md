@@ -17,6 +17,9 @@ pip install -e ".[dev]"
 
 ## Running tests
 
+The shell-parity tests compare nuh's reading of a command with what real `bash` and `zsh` do, so both must be
+on `PATH` (`apt install zsh`, `brew install zsh`); without zsh those tests fail at setup.
+
 ```bash
 nuh test "pytest"    # classify it first if you have nuh installed
 pytest               # run the test suite

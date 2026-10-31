@@ -38,5 +38,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: pip install -e '.[dev]'
+      - name: zsh (the shell-parity tests run real bash and zsh; the runner image has no zsh)
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
       - name: Tests (live-LLM tests excluded)
         run: pytest tests/ --ignore=tests/test_llm_live.py -q
