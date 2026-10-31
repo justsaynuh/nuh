@@ -3,7 +3,6 @@
 import os
 import pathlib
 import stat
-import sys
 
 import pytest
 
@@ -99,11 +98,16 @@ class TestToolIdentityKept:
         other = _executable(tmp_path / "elsewhere" / "mytool", "#!/bin/sh\n")
         assert not program_identity.is_tool(other)
 
-    def test_symlink_into_standard_directory(self, tmp_path):
-        link = tmp_path / "python"
-        link.symlink_to(os.path.realpath(sys.executable))
-        assert program_identity.is_tool(str(link)) == any(
-            os.path.realpath(sys.executable).startswith(d + os.sep) for d in program_identity._STANDARD_DIRS)
+    def test_symlink_into_standard_directory(self, tmp_path, monkeypatch):
+        # An empty PATH, so the path-lookup rule cannot name either link a tool: only where it points decides.
+        # (A CI Python under /opt/hostedtoolcache is on PATH, which made a sys.executable link a tool there.)
+        monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+        into_bin = tmp_path / "sh"
+        into_bin.symlink_to(os.path.realpath("/bin/sh"))
+        assert program_identity.is_tool(str(into_bin))
+        elsewhere = tmp_path / "mytool"
+        elsewhere.symlink_to(_executable(tmp_path / "opt" / "mytool", "#!/bin/sh\n"))
+        assert not program_identity.is_tool(str(elsewhere))
 
     def test_user_classified_path(self, tmp_path):
         tool = _executable(tmp_path / "skills" / "bin" / "session-transcript", "#!/bin/sh\n")
