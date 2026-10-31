@@ -41,4 +41,15 @@ jobs:
       - name: zsh (the shell-parity tests run real bash and zsh; the runner image has no zsh)
         run: sudo apt-get update -q && sudo apt-get install -y -q zsh
       - name: Tests (live-LLM tests excluded)
-        run: pytest tests/ --ignore=tests/test_llm_live.py -q
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest tests/ --ignore=tests/test_llm_live.py -q -rfE --tb=line 2>&1 | tee "$RUNNER_TEMP/pytest.txt"
+      # Annotations show on the run page and in a PR's diff without opening the log (GitHub keeps 10 per type).
+      - name: Failures as annotations
+        if: failure()
+        shell: bash
+        run: |
+          grep -E '^/.*:[0-9]+: ' "$RUNNER_TEMP/pytest.txt" | head -10 | sed 's/^/::error::/' || true
+          grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.txt" | head -10 | sed 's/^/::warning::/' || true
+          tail -1 "$RUNNER_TEMP/pytest.txt" | sed 's/^/::notice::/'
